@@ -10,6 +10,8 @@ import UIKit
 import AVFoundation
 import Photos
 import Speech
+import CoreSpotlight
+import MobileCoreServices
 
 class MemoriesViewController: UICollectionViewController, UICollectionViewDelegateFlowLayout {
     
@@ -19,6 +21,8 @@ class MemoriesViewController: UICollectionViewController, UICollectionViewDelega
     var audioRecorder: AVAudioRecorder?
     var recordingURL: URL!
     var audioPlayer: AVAudioPlayer?
+    var filteredMemories = [URL]()
+    var searchQuery: CSSearchQuery?
     
 
     //MARK: View
@@ -246,10 +250,96 @@ class MemoriesViewController: UICollectionViewController, UICollectionViewDelega
                     
                     try text.write(to: transcription, atomically: true, encoding: String.Encoding.utf8)
                     
+                    self.indexMemory(memory: memory, text: text)
+                    
                 }catch {
                     print("Failed to save transcription")
                 }
             }
+        }
+    }
+    
+    //MARK: Spotlight
+    func indexMemory(memory: URL, text: String) {
+        
+        //Create a basic attribute set
+        let attributeSet = CSSearchableItemAttributeSet(itemContentType: kUTTypeText as String)
+        
+        attributeSet.title = "Happy Days Memory"
+        attributeSet.contentDescription = text
+        attributeSet.thumbnailURL = thumbnailURL(for: memory)
+        
+        //Wrap it in a searchable item, using the memory's full path as its unique identifier
+        let item = CSSearchableItem(uniqueIdentifier: memory.path, domainIdentifier: "com.jsherratt", attributeSet: attributeSet)
+        
+        //Make it never expire
+        item.expirationDate = Date.distantFuture
+        
+        //Ask spotlight to index the item
+        CSSearchableIndex.default().indexSearchableItems([item]) { error in
+            
+            if let error = error {
+                print("Indexing error: \(error.localizedDescription)")
+                
+            }else {
+                print("Search item successfully indexed: \(text)")
+            }
+        }
+        
+    }
+    
+    //MARK: Search bar
+    func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        
+        filterMemories(text: searchText)
+    }
+    
+    func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+        
+        searchBar.resignFirstResponder()
+        
+    }
+    
+    func filterMemories(text: String) {
+        
+        guard text.characters.count > 0 else {
+            
+            filteredMemories = memories
+            
+            UIView.performWithoutAnimation {
+                collectionView?.reloadSections(IndexSet(integer: 1))
+            }
+            return
+        }
+        
+        var allItems = [CSSearchableItem]()
+        searchQuery?.cancel()
+        
+        let queryString = "contentDescription == \"*\(text)*\"c"
+        
+        searchQuery = CSSearchQuery(queryString: queryString, attributes: nil)
+        
+        searchQuery?.foundItemsHandler = { items in
+            allItems.append(contentsOf: items)
+        }
+        
+        searchQuery?.completionHandler = { error in
+            
+            DispatchQueue.main.async { [unowned self] in
+                self.activateFilter(matches: allItems)
+            }
+        }
+        searchQuery?.start()
+    }
+    
+    func activateFilter(matches: [CSSearchableItem]) {
+        
+        filteredMemories = matches.map { item in
+            return URL(fileURLWithPath: item.uniqueIdentifier)
+        }
+        
+        UIView.performWithoutAnimation {
+            collectionView?.reloadSections(IndexSet(integer: 1))
         }
     }
     
@@ -288,6 +378,8 @@ class MemoriesViewController: UICollectionViewController, UICollectionViewDelega
                 
             }
         }
+        
+        filteredMemories = memories
         
         //Reload the list of memories
         collectionView?.reloadSections(IndexSet(integer: 1))
